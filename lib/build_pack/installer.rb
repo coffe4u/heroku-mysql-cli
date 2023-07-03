@@ -5,20 +5,75 @@ module BuildPack
     class << self
 
       def install(build_dir, cache_dir)
-          run_command_with_message(command: "apt-get update", message: "Reloading apt-get")
-          run_command_with_message(command: "wget --no-check-certificate -qO - 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x859be8d7c586f538430b19c2467b942d3a79bd29' | gpg --dearmor -o /usr/share/keyrings/mysql-keyring.gpg", message: "Install Mysql GPG key")
-          run_command_with_message(command: "echo \"deb [signed-by=/usr/share/keyrings/mysql-keyring.gpg] http://repo.mysql.com/apt/ubuntu/ bionic mysql-5.7\" | sudo tee /etc/apt/sources.list.d/mysql.list", message: "Add Mysql deb repository")
-          run_command_with_message(command: "apt install -fy mysql-community-client=5.7.39-1ubuntu18.04", message: "Install MySQL community client")
-          run_command_with_message(command: "apt install -fy mysql-client=5.7.39-1ubuntu18.04", message: "Install MySQL client")
+        init_paths(build_dir, cache_dir)
+        make_dirs
+        Downloader.download_latest_client_to(@mysql_pkg) unless cached?
+        if client_exists?
+          install_client and cleanup
+        else
+          fail_install
+        end
       end
 
       private
+
+      def init_paths(build_dir, cache_dir)
+        @bin_path = "#{build_dir}/bin"
+        @tmp_path = "#{build_dir}/tmp"
+        @mysql_path = "#{@tmp_path}/mysql-client-core"
+        @mysql_binaries = "#{@mysql_path}/usr/bin"
+        @mysql_pkg = "#{cache_dir}/mysql-client-core.deb"
+      end
+
+      def make_dirs
+        FileUtils.mkdir_p(@bin_path)
+        FileUtils.mkdir_p(@tmp_path)
+      end
+
+      def cached?
+        if exists = client_exists?
+          Logger.log_header("Using MySQL Client package from cache")
+        end
+
+        exists
+      end
+
+      def client_exists?
+        File.exist?(@mysql_pkg)
+      end
+
+      def install_client
+        run_command_with_message(command: "dpkg -x #{@mysql_pkg} #{@mysql_path}", message: "Installing MySQL Client")
+        fix_perms_and_mv_binaries
+      end
 
       def run_command_with_message(command:, message:)
         Logger.log_header("#{message}")
         Logger.log("#{command}")
         output = `#{command}`
         puts output
+      end
+
+      def fix_perms_and_mv_binaries
+        # TODO: Doing a glob for some reason causes issues on heroku-16,
+        #       erroring out as it can't find the files to chmod and mv.
+        #       Specifying `mysqldump` specifically for now. Otherwise use:
+        # ```
+        # binaries = Dir.glob("#{@mysql_binaries}/*")
+        # ```
+        mysqldump_binary = Dir.glob("#{@mysql_binaries}/mysql")
+        FileUtils.chmod("u=wrx", mysqldump_binary)
+        FileUtils.mv(mysqldump_binary, @bin_path)
+      end
+
+      def cleanup
+        Logger.log_header("Cleaning up")
+        FileUtils.remove_dir(@mysql_path)
+      end
+
+      def fail_install
+        Logger.log_header("Failing mysql client installation as no suitable clients were found")
+        exit 1
       end
     end
   end

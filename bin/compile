@@ -1,4 +1,4 @@
-#!/usr/bin/env ruby
+#!/bin/ruby
 
 # sync output
 $stdout.sync = true
